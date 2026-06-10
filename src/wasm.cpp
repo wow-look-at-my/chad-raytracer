@@ -19,6 +19,10 @@ static std::vector<uint8_t> g_rgba;
 static std::vector<float> g_pack;
 static float g_info[20];
 static double g_stats[4];
+static Mesh g_wmesh;
+static std::vector<float> g_mesh_verts;
+static std::vector<uint32_t> g_mesh_tris;
+static float g_grid_meta[18];
 
 static double now_s() {
   using namespace std::chrono;
@@ -37,10 +41,60 @@ extern "C" {
 KEEP int chad_lanes() { return LANES; }
 
 KEEP void chad_set_scene(int id) {
-  static const char* names[] = {"one", "s8", "s64", "s256", "rtiow"};
+  static const char* names[] = {"one", "s8", "s64", "s256", "rtiow", "sponza"};
   if (id < 0) id = 0;
-  if (id > 4) id = 4;
-  g_desc = make_scene(names[id]);
+  if (id > 5) id = 5;
+  if (id == 5 && !g_wmesh.valid()) id = 4;
+  g_desc = make_scene(names[id], id == 5 ? &g_wmesh : nullptr);
+}
+
+// Parse a .chad mesh blob and build its uniform grid; returns triangle count.
+KEEP int chad_load_mesh(const uint8_t* data, int len) {
+  if (!mesh_load(g_wmesh, data, size_t(len))) return 0;
+  return int(g_wmesh.ntris);
+}
+
+KEEP int chad_has_mesh() { return g_wmesh.valid() ? 1 : 0; }
+
+// Packed buffers for the WebGPU path.
+KEEP float* chad_mesh_verts_ptr() {
+  g_mesh_verts.resize(size_t(g_wmesh.nverts) * 3);
+  for (uint32_t v = 0; v < g_wmesh.nverts; v++) {
+    g_mesh_verts[3 * v] = g_wmesh.vx[v];
+    g_mesh_verts[3 * v + 1] = g_wmesh.vy[v];
+    g_mesh_verts[3 * v + 2] = g_wmesh.vz[v];
+  }
+  return g_mesh_verts.data();
+}
+
+KEEP uint32_t* chad_mesh_tris_ptr() {
+  g_mesh_tris.resize(size_t(g_wmesh.ntris) * 4);
+  for (uint32_t t = 0; t < g_wmesh.ntris; t++) {
+    g_mesh_tris[4 * t] = g_wmesh.i0[t];
+    g_mesh_tris[4 * t + 1] = g_wmesh.i1[t];
+    g_mesh_tris[4 * t + 2] = g_wmesh.i2[t];
+    g_mesh_tris[4 * t + 3] = g_wmesh.color[t];
+  }
+  return g_mesh_tris.data();
+}
+
+KEEP const uint32_t* chad_grid_start_ptr() { return g_wmesh.cell_start.data(); }
+KEEP int chad_grid_start_len() { return int(g_wmesh.cell_start.size()); }
+KEEP const uint32_t* chad_grid_items_ptr() { return g_wmesh.items.data(); }
+KEEP int chad_grid_items_len() { return int(g_wmesh.items.size()); }
+
+// [0..2] bmin [3..5] bmax [6..8] cell [9..11] inv_cell [12..14] dims
+// [15] ntris [16] nverts [17] items_len
+KEEP float* chad_grid_meta_ptr() {
+  const Mesh& m = g_wmesh;
+  float* q = g_grid_meta;
+  q[0] = m.bmin.x; q[1] = m.bmin.y; q[2] = m.bmin.z;
+  q[3] = m.bmax.x; q[4] = m.bmax.y; q[5] = m.bmax.z;
+  q[6] = m.cell.x; q[7] = m.cell.y; q[8] = m.cell.z;
+  q[9] = m.inv_cell.x; q[10] = m.inv_cell.y; q[11] = m.inv_cell.z;
+  q[12] = float(m.gx); q[13] = float(m.gy); q[14] = float(m.gz);
+  q[15] = float(m.ntris); q[16] = float(m.nverts); q[17] = float(m.items.size());
+  return g_grid_meta;
 }
 
 KEEP int chad_scene_count() { return g_desc.scene.count(); }

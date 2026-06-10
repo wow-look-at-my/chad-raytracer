@@ -45,5 +45,34 @@ for (const [id, label] of [[0, '1 sphere'], [2, '64 spheres'], [4, `rtiow (${cou
   assert.ok(rps > 1e5, `implausibly slow: ${rps} rays/s`);
 }
 
+// Sponza mesh: load, trace, and check the GPU-facing buffers.
+{
+  const { readFile } = await import('node:fs/promises');
+  const bytes = new Uint8Array(
+    await readFile(new URL('../web/assets/sponza.chad', import.meta.url)));
+  const ptr = m._malloc(bytes.length);
+  m.HEAPU8.set(bytes, ptr);
+  const ntris = m._chad_load_mesh(ptr, bytes.length);
+  m._free(ptr);
+  assert.ok(ntris > 200000, `sponza load failed (${ntris} tris)`);
+  m._chad_set_scene(5);
+  const meta = new Float32Array(m.HEAPF32.buffer, m._chad_grid_meta_ptr(), 18);
+  assert.equal(Math.round(meta[15]), ntris);
+  assert.ok(meta[12] > 4 && meta[13] > 4 && meta[14] > 4, 'grid dims implausible');
+  assert.ok(m._chad_grid_items_len() >= ntris, 'grid items fewer than tris');
+  const rays2 = m._chad_render(320, 180, 1, 1, threads, 0.0);
+  assert.ok(rays2 >= 320 * 180);
+  const px2 = new Uint8Array(m.HEAPU8.buffer, m._chad_frame_ptr(), 320 * 180 * 4);
+  const colors = new Set();
+  for (let i = 0; i < px2.length; i += 4) colors.add((px2[i] << 16) | (px2[i + 1] << 8) | px2[i + 2]);
+  assert.ok(colors.size > 50, `sponza image suspiciously uniform (${colors.size})`);
+  const t0 = performance.now();
+  const rps = m._chad_bench_primary(640, 360, 3, threads);
+  const wall = ((performance.now() - t0) / 1000).toFixed(2);
+  console.log(`wasm bench sponza (${ntris} tris, grid): ${(rps / 1e6).toFixed(1)} Mrays/s primary ` +
+              `(640x360, ${threads} threads, ${wall}s)`);
+  assert.ok(rps > 1e4, `implausibly slow: ${rps} rays/s`);
+}
+
 console.log(`wasm node test OK (${which.includes('-st') ? 'single-threaded' : threads + ' threads'})`);
 process.exit(0); // pthread pool keeps the event loop alive otherwise

@@ -13,6 +13,8 @@
 constexpr int LANES = CHAD_LANES;
 constexpr float RAY_EPS = 1e-3f;
 constexpr float RAY_FAR = 1e30f;
+// Triangle hits are encoded as MESH_BIT | tri_index in RayPacket::hit.
+constexpr int32_t MESH_BIT = 0x40000000;
 
 struct alignas(64) RayPacket {
   float ox[LANES], oy[LANES], oz[LANES];
@@ -57,6 +59,16 @@ inline void intersect(const Scene& sc, RayPacket& p) {
       p.hit[i] = m ? s : p.hit[i];
     }
   }
+  if (sc.mesh && sc.mesh->valid()) {
+    for (int i = 0; i < LANES; ++i) {
+      MeshHit mh;
+      if (mesh_intersect(*sc.mesh, {p.ox[i], p.oy[i], p.oz[i]}, {p.dx[i], p.dy[i], p.dz[i]},
+                         RAY_EPS, p.t[i], mh, false)) {
+        p.t[i] = mh.t;
+        p.hit[i] = MESH_BIT | mh.tri;
+      }
+    }
+  }
 }
 
 // Any-hit within p.t[i]; occ[i] set nonzero if the lane is blocked.
@@ -92,6 +104,15 @@ inline void occluded(const Scene& sc, const RayPacket& p, int32_t* __restrict oc
       float t0 = bb[i] - sq;
       bool h = (disc > 0.0f) & (t0 > RAY_EPS) & (t0 < p.t[i]);
       occ[i] = h ? 1 : occ[i];
+    }
+  }
+  if (sc.mesh && sc.mesh->valid()) {
+    for (int i = 0; i < LANES; ++i) {
+      if (occ[i] || p.t[i] <= RAY_EPS) continue;
+      MeshHit mh;
+      if (mesh_intersect(*sc.mesh, {p.ox[i], p.oy[i], p.oz[i]}, {p.dx[i], p.dy[i], p.dz[i]},
+                         RAY_EPS, p.t[i], mh, true))
+        occ[i] = 1;
     }
   }
 }

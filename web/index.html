@@ -24,8 +24,9 @@
   <div id="controls">
     <label>renderer
       <select id="renderer">
-        <option value="wasm" selected>WASM SIMD (CPU)</option>
-        <option value="webgpu">WebGPU compute (GPU, no RT units)</option>
+        <option value="wasm" selected>WASM SIMD raytraced (CPU)</option>
+        <option value="webgpu">WebGPU raytraced (compute, no RT units)</option>
+        <option value="raster" disabled>WebGPU rasterized (no shadows)</option>
       </select>
     </label>
     <label>scene
@@ -35,6 +36,7 @@
         <option value="2">64 spheres</option>
         <option value="3">256 spheres</option>
         <option value="4" selected>RTIOW (479 spheres)</option>
+        <option value="5">Sponza (262k triangles)</option>
       </select>
     </label>
     <label>resolution

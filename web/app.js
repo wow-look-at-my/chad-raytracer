@@ -1,4 +1,4 @@
-import { GpuEngine } from './webgpu.js';
+import { GpuEngine, GpuMesh } from './webgpu.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('canvas');
@@ -40,12 +40,15 @@ const SCENES = [
   { id: 2, label: '64 spheres', spheres: 64 },
   { id: 3, label: '256 spheres', spheres: 256 },
   { id: 4, label: 'RTIOW', spheres: 479 },
+  { id: 5, label: 'Sponza', spheres: 0, mesh: true },
 ];
 
 let wasm = null;
 let threaded = false;
 let gpu = null;
 let gpuError = null;
+let gpuMesh = null;
+let sponzaTris = 0;
 let ctx2d = null;
 let imgData = null;
 let animating = true;
@@ -97,11 +100,58 @@ function wasmInfo() {
   return new Float32Array(wasm.HEAPF32.buffer, ptr, 18).slice();
 }
 
-function applyScene() {
+async function ensureSponzaWasm() {
+  if (sponzaTris > 0) return sponzaTris;
+  setStatus('loading sponza mesh…');
+  const r = await fetch('./assets/sponza.chad');
+  if (!r.ok) throw new Error(`sponza.chad fetch failed (${r.status})`);
+  const bytes = new Uint8Array(await r.arrayBuffer());
+  const ptr = wasm._malloc(bytes.length);
+  wasm.HEAPU8.set(bytes, ptr);
+  sponzaTris = wasm._chad_load_mesh(ptr, bytes.length);
+  wasm._free(ptr);
+  if (!sponzaTris) throw new Error('sponza.chad parse failed');
+  setStatus('');
+  return sponzaTris;
+}
+
+function wasmMeshData() {
+  const meta = new Float32Array(wasm.HEAPF32.buffer, wasm._chad_grid_meta_ptr(), 18).slice();
+  const ntris = Math.round(meta[15]);
+  const nverts = Math.round(meta[16]);
+  const nitems = Math.round(meta[17]);
+  const verts = new Float32Array(wasm.HEAPF32.buffer, wasm._chad_mesh_verts_ptr(), nverts * 3).slice();
+  const tris = new Uint32Array(wasm.HEAPU32.buffer, wasm._chad_mesh_tris_ptr(), ntris * 4).slice();
+  const gridStart = new Uint32Array(wasm.HEAPU32.buffer, wasm._chad_grid_start_ptr(),
+                                    wasm._chad_grid_start_len()).slice();
+  const gridItems = new Uint32Array(wasm.HEAPU32.buffer, wasm._chad_grid_items_ptr(),
+                                    Math.max(1, nitems)).slice();
+  return { meta, verts, tris, gridStart, gridItems, info: wasmInfo() };
+}
+
+async function ensureGpuMesh() {
+  if (gpuMesh) return gpuMesh;
+  const eng = await ensureGpu();
+  if (!eng) return null;
+  await ensureSponzaWasm();
+  const save = state.sceneId;
+  wasm._chad_set_scene(5);
+  gpuMesh = await GpuMesh.create(eng, wasmMeshData());
+  wasm._chad_set_scene(save);
+  gpuMesh.setSize(state.W, state.H);
+  return gpuMesh;
+}
+
+async function applyScene() {
+  if (state.sceneId === 5) await ensureSponzaWasm();
   wasm._chad_set_scene(state.sceneId);
-  if (gpu) {
+  if (gpu && state.sceneId !== 5) {
     gpu.setScene(wasmSpheres(), wasmInfo());
     gpu.setSize(state.W, state.H, state.bounces);
+  }
+  if (state.sceneId === 5 && (state.renderer === 'webgpu' || state.renderer === 'raster')) {
+    const gm = await ensureGpuMesh();
+    if (gm) gm.setSize(state.W, state.H);
   }
 }
 
@@ -110,6 +160,7 @@ function applySize() {
   canvas.height = state.H;
   imgData = new ImageData(state.W, state.H);
   if (gpu) gpu.setSize(state.W, state.H, state.bounces);
+  if (gpuMesh) gpuMesh.setSize(state.W, state.H);
 }
 
 async function ensureGpu() {
@@ -134,11 +185,14 @@ function fmtRays(rps) {
 
 function hudText(ms, rays) {
   const sc = SCENES.find((s) => s.id === state.sceneId);
-  const nsph = wasm._chad_scene_count();
+  const what = sc.mesh
+    ? `${sponzaTris.toLocaleString()} tris, uniform grid (no BVH)`
+    : `${wasm._chad_scene_count()} spheres, brute force`;
   const eng = state.renderer === 'wasm'
     ? `WASM SIMD ×${wasm._chad_lanes()} | ${state.threads} thread${state.threads > 1 ? 's' : ''}`
-    : 'WebGPU compute';
-  return `${state.W}×${state.H} | ${sc.label} (${nsph} spheres, brute force)\n` +
+    : state.renderer === 'raster' ? 'WebGPU RASTER (no shadows, the old cheat)'
+    : 'WebGPU compute raytracing';
+  return `${state.W}×${state.H} | ${sc.label} (${what})\n` +
          `${eng}\n${fpsEMA.toFixed(1)} fps | ${fmtRays(raysEMA)}${ms != null ? ` | ${ms.toFixed(1)} ms/frame` : ''}` +
          `${rays != null ? ` | ${(rays / 1e6).toFixed(2)} Mrays/frame` : ''}`;
 }
@@ -163,6 +217,12 @@ function frame(t) {
     imgData.data.set(px);
     ctx2d.putImageData(imgData, 0, 0);
     hud.textContent = hudText(ms, rays);
+  } else if (state.sceneId === 5 && gpuMesh) {
+    if (state.renderer === 'raster') gpuMesh.renderRaster(orbit);
+    else gpuMesh.renderRT(orbit);
+    const rps = state.renderer === 'raster' ? 0 : state.W * state.H * fpsEMA;
+    raysEMA = rps ? (raysEMA ? raysEMA * 0.9 + rps * 0.1 : rps) : 0;
+    hud.textContent = hudText(null, null) + (rps ? ' (primary-ray lower bound)' : '');
   } else if (gpu) {
     gpu.render(orbit);
     // GPU timing is async; show wall fps and the primary-ray lower bound.
@@ -211,22 +271,47 @@ async function runBench() {
   tbody.innerHTML = '';
   const gpuOk = await ensureGpu();
   let best = 0;
+  let sponzaGpu = null;
   try {
     for (const sc of SCENES) {
+      if (sc.mesh) {
+        try {
+          await ensureSponzaWasm();
+        } catch (err) {
+          setStatus(`skipping sponza: ${err.message}`);
+          continue;
+        }
+      }
       setStatus(`benchmarking ${sc.label} — WASM…`);
       wasm._chad_set_scene(sc.id);
-      const nsph = wasm._chad_scene_count();
+      const what = sc.mesh ? `${sponzaTris.toLocaleString()} tris` : String(wasm._chad_scene_count());
       const wrps = await benchWasm();
-      best = Math.max(best, wrps);
+      if (!sc.mesh) best = Math.max(best, wrps);
       let grps = null;
-      if (gpuOk) {
+      if (gpuOk && !sc.mesh) {
         setStatus(`benchmarking ${sc.label} — WebGPU…`);
         gpu.setScene(wasmSpheres(), wasmInfo());
         grps = await benchGpu();
         best = Math.max(best, grps);
+      } else if (gpuOk && sc.mesh) {
+        setStatus(`benchmarking ${sc.label} — WebGPU…`);
+        const gm = await ensureGpuMesh();
+        if (gm) {
+          let frames = 2, totalRays = 0, totalTime = 0;
+          while (totalTime < 1.0) {
+            const dt = await gm.benchBatch(1920, 1080, frames);
+            totalRays += frames * 1920 * 1080;
+            totalTime += dt;
+            frames = Math.max(2, Math.min(512, Math.ceil((frames * 0.3) / Math.max(dt, 1e-3))));
+            await yieldUI();
+          }
+          grps = totalRays / totalTime;
+          sponzaGpu = grps;
+          best = Math.max(best, grps);
+        }
       }
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${sc.label}</td><td>${nsph}</td>` +
+      tr.innerHTML = `<td>${sc.label}</td><td>${what}</td>` +
         `<td class="num">${fmtRays(wrps)}</td>` +
         `<td class="num">${grps == null ? '—' : fmtRays(grps)}</td>`;
       tbody.appendChild(tr);
@@ -242,7 +327,13 @@ async function runBench() {
         `<td class="${ratio >= 1 ? 'faster' : 'slower'}">${ratio >= 1 ? ratio.toFixed(1) + '× faster' : (1 / ratio).toFixed(1) + '× slower'}</td>`;
       hwBody.appendChild(tr);
     }
-    setStatus(`done — best brute-force throughput on this machine: ${fmtRays(best)}`);
+    let done = `done — best no-BVH/no-RT-core throughput on this machine: ${fmtRays(best)}`;
+    if (sponzaGpu != null) {
+      const r = sponzaGpu / 757e6;
+      done += ` | Sponza: ${fmtRays(sponzaGpu)} vs RTX 2070 hardware RT on Sponza 757 Mrays/s → ` +
+              (r >= 1 ? `${r.toFixed(2)}× faster` : `${(1 / r).toFixed(2)}× slower`);
+    }
+    setStatus(done);
   } finally {
     for (const b of document.querySelectorAll('button, select')) b.disabled = false;
     if (!threaded) $('threads').disabled = true;
@@ -251,13 +342,28 @@ async function runBench() {
   }
 }
 
+function updateRasterOption() {
+  const opt = $('renderer').querySelector('option[value="raster"]');
+  const allowed = state.sceneId === 5;
+  opt.disabled = !allowed;
+  if (!allowed && state.renderer === 'raster') {
+    $('renderer').value = 'webgpu';
+    $('renderer').dispatchEvent(new Event('change'));
+  }
+}
+
 function wireControls() {
   $('renderer').addEventListener('change', async (e) => {
     const v = e.target.value;
-    if (v === 'webgpu') {
+    if (v === 'webgpu' || v === 'raster') {
       const ok = await ensureGpu();
       if (!ok) { e.target.value = 'wasm'; return; }
-      state.renderer = 'webgpu';
+      if (state.sceneId === 5) {
+        const gm = await ensureGpuMesh();
+        if (!gm) { e.target.value = 'wasm'; return; }
+        gm.setSize(state.W, state.H);
+      }
+      state.renderer = v;
       canvas.hidden = true;
       gpucanvas.hidden = false;
     } else {
@@ -267,9 +373,17 @@ function wireControls() {
     }
     raysEMA = 0; fpsEMA = 0;
   });
-  $('scene').addEventListener('change', (e) => {
+  $('scene').addEventListener('change', async (e) => {
     state.sceneId = Number(e.target.value);
-    applyScene();
+    updateRasterOption();
+    try {
+      await applyScene();
+    } catch (err) {
+      setStatus(err.message);
+      state.sceneId = 4;
+      e.target.value = '4';
+      await applyScene();
+    }
     raysEMA = 0;
   });
   $('res').addEventListener('change', (e) => {
@@ -296,7 +410,8 @@ async function main() {
   ctx2d = canvas.getContext('2d');
   fillThreads();
   wireControls();
-  applyScene();
+  updateRasterOption();
+  await applyScene();
   applySize();
   hud.textContent = 'ready';
   requestAnimationFrame(frame);

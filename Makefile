@@ -14,7 +14,7 @@ native: chad
 chad: src/main.cpp src/vec3.h src/image.h src/scene.h src/trace.h src/render.h
 	$(CXX) $(NATIVE_FLAGS) -o $@ src/main.cpp
 
-WASM_EXPORTS := -sEXPORTED_FUNCTIONS=_malloc,_free,_chad_set_scene,_chad_scene_count,_chad_render,_chad_bench_primary,_chad_frame_ptr,_chad_stats_ptr,_chad_spheres_ptr,_chad_scene_info_ptr,_chad_lanes,_chad_selftest \
+WASM_EXPORTS := -sEXPORTED_FUNCTIONS=_malloc,_free,_chad_set_scene,_chad_scene_count,_chad_render,_chad_bench_primary,_chad_frame_ptr,_chad_stats_ptr,_chad_spheres_ptr,_chad_scene_info_ptr,_chad_lanes,_chad_selftest,_chad_load_mesh,_chad_has_mesh,_chad_mesh_verts_ptr,_chad_mesh_tris_ptr,_chad_grid_start_ptr,_chad_grid_start_len,_chad_grid_items_ptr,_chad_grid_items_len,_chad_grid_meta_ptr \
                 -sEXPORTED_RUNTIME_METHODS=HEAPF32,HEAPU8,HEAPU32,HEAPF64
 
 wasm: web/chad.js web/chad-st.js

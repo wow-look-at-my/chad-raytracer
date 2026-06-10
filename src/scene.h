@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 
+#include "mesh.h"
 #include "vec3.h"
 
 struct Material {
@@ -16,6 +17,7 @@ struct Material {
 struct Scene {
   std::vector<float> cx, cy, cz, rad, rad2, inv_rad;
   std::vector<Material> mat;
+  const Mesh* mesh = nullptr;  // optional triangle mesh (uniform grid, no BVH)
 
   Vec3 sun = normalize(Vec3{0.45f, 0.75f, 0.50f});  // direction TO the sun
   Vec3 sun_color{1.00f, 0.93f, 0.80f};
@@ -50,11 +52,22 @@ inline uint32_t xs32(uint32_t& s) {
 }
 inline float rnd(uint32_t& s) { return float(xs32(s) >> 8) * (1.0f / 16777216.0f); }
 
-inline SceneDesc make_scene(const std::string& name) {
+inline SceneDesc make_scene(const std::string& name, const Mesh* mesh = nullptr) {
   SceneDesc d;
   d.name = name;
   Scene& sc = d.scene;
   uint32_t seed = 0xC4ADC4ADu;
+
+  if (name == "sponza" && mesh && mesh->valid()) {
+    sc.mesh = mesh;
+    sc.sun = mesh->sun;
+    sc.sun_intensity = mesh->sun_intensity;
+    sc.ambient = mesh->ambient;
+    d.lookfrom = mesh->cam_from;
+    d.lookat = mesh->cam_at;
+    d.vfov = mesh->vfov;
+    return d;
+  }
 
   if (name == "one") {
     sc.add({0, 1, 0}, 1.0f, Material{{0.85f, 0.3f, 0.25f}, 0.15f, 0});

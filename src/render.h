@@ -125,22 +125,36 @@ inline void shade_packet(const Scene& sc, RayPacket& p, int nvalid, int bounces,
       hx[i] = p.ox[i] + t * p.dx[i];
       hy[i] = p.oy[i] + t * p.dy[i];
       hz[i] = p.oz[i] + t * p.dz[i];
-      float ir = sc.inv_rad[s];
-      nx[i] = (hx[i] - sc.cx[s]) * ir;
-      ny[i] = (hy[i] - sc.cy[s]) * ir;
-      nz[i] = (hz[i] - sc.cz[s]) * ir;
-      const Material& m = sc.mat[s];
-      ar[i] = m.albedo.x;
-      ag[i] = m.albedo.y;
-      ab[i] = m.albedo.z;
-      if (m.checker) {
-        int par = (int(std::floor(hx[i] * 0.5f)) + int(std::floor(hz[i] * 0.5f))) & 1;
-        float f = par ? 1.0f : 0.34f;
-        ar[i] *= f;
-        ag[i] *= f;
-        ab[i] *= f;
+      if (s & MESH_BIT) {
+        int tri = s & (MESH_BIT - 1);
+        Vec3 n = mesh_normal(*sc.mesh, tri);
+        if (n.x * p.dx[i] + n.y * p.dy[i] + n.z * p.dz[i] > 0.0f) n = -n;
+        nx[i] = n.x;
+        ny[i] = n.y;
+        nz[i] = n.z;
+        Vec3 alb = mesh_albedo(*sc.mesh, tri);
+        ar[i] = alb.x;
+        ag[i] = alb.y;
+        ab[i] = alb.z;
+        rf[i] = 0.0f;
+      } else {
+        float ir = sc.inv_rad[s];
+        nx[i] = (hx[i] - sc.cx[s]) * ir;
+        ny[i] = (hy[i] - sc.cy[s]) * ir;
+        nz[i] = (hz[i] - sc.cz[s]) * ir;
+        const Material& m = sc.mat[s];
+        ar[i] = m.albedo.x;
+        ag[i] = m.albedo.y;
+        ab[i] = m.albedo.z;
+        if (m.checker) {
+          int par = (int(std::floor(hx[i] * 0.5f)) + int(std::floor(hz[i] * 0.5f))) & 1;
+          float f = par ? 1.0f : 0.34f;
+          ar[i] *= f;
+          ag[i] *= f;
+          ab[i] *= f;
+        }
+        rf[i] = m.reflect;
       }
-      rf[i] = m.reflect;
       float nd = nx[i] * sc.sun.x + ny[i] * sc.sun.y + nz[i] * sc.sun.z;
       if (nd > 0.0f) {
         ndl[i] = nd;

@@ -33,6 +33,9 @@ emsdk lives at `/opt/emsdk` in the dev container: `source /opt/emsdk/emsdk_env.s
 
 - The goal of this repo: faster rays/s than published hardware-RT figures, with zero BVH and zero RT hardware. Don't add a BVH, don't use WebGPU RT extensions.
 - Threaded WASM requires cross-origin isolation; `coi-serviceworker.js` provides it on GitHub Pages. The single-threaded fallback build (`chad-st.js`) loads when isolation is unavailable.
+- GPU frames/benches are submitted in adaptive row slices (`sliceRows`/`maybeGrowSlices` in `webgpu.js`, slice offset in the uniforms) so a slow adapter never gets a watchdog-tripping submission. Keep new GPU work sliced the same way.
+- Canvas presentation does not work on headless SwiftShader (device loss at configure/present); verify GPU pipelines offscreen via texture readback in that environment. The app falls back to WASM on device loss.
+- README benchmark images live in `docs/img/` (recompressed with Pillow).
 - `web/chad*.js`/`*.wasm` are build artifacts (gitignored); CI builds them.
 - Whitted shading and the WGSL kernels must stay visually in sync (same sky, sun, ambient, gamma-2 output).
 - The raster mode (mesh.wgsl `vs_mesh`/`fs_mesh`) intentionally has no shadows — it exists to contrast with the raytraced mode.

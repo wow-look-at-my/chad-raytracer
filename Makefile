@@ -25,7 +25,8 @@ web/chad.js: src/wasm.cpp $(HEADERS)
 	$(EMCC) $(WASM_FLAGS) -pthread src/wasm.cpp -o $@ \
 	  -sMODULARIZE=1 -sEXPORT_NAME=createChad -sEXPORT_ES6=1 \
 	  -sINITIAL_MEMORY=268435456 -sSTACK_SIZE=2097152 \
-	  -sPTHREAD_POOL_SIZE='Math.min(32,(typeof navigator!=="undefined"&&navigator.hardwareConcurrency)||4)' \
+	  -sDEFAULT_PTHREAD_STACK_SIZE=262144 \
+	  -sPTHREAD_POOL_SIZE='Math.min(128,(globalThis.CHAD_POOL||(typeof navigator!=="undefined"&&navigator.hardwareConcurrency)||4))' \
 	  $(WASM_EXPORTS) \
 	  -sENVIRONMENT=web,worker,node \
 	  -sALLOW_MEMORY_GROWTH=0

@@ -57,7 +57,9 @@ let lastT = 0;
 let fpsEMA = 0;
 let raysEMA = 0;
 let gpuMsEMA = 0;
-let gpuBusy = false;
+let gpuInFlight = 0;
+let gpuLastDone = 0;
+const GPU_MAX_IN_FLIGHT = 2;
 let switching = false;
 let benchRunning = false;
 
@@ -65,23 +67,37 @@ const state = { renderer: 'wasm', sceneId: 4, W: 1280, H: 720, bounces: 2, threa
 
 function setStatus(msg) { statusEl.textContent = msg; }
 
+// WASM threads come from a pre-spawned worker pool, sized at module load.
+// Browsers may under-report cores in navigator.hardwareConcurrency for
+// anti-fingerprinting (Firefox commonly says 8, resistFingerprinting says 2),
+// so ?threads=N overrides the pool size for many-core machines.
+function poolSize() {
+  const override = Number(new URLSearchParams(location.search).get('threads'));
+  const hc = navigator.hardwareConcurrency || 4;
+  return Math.min(128, Math.max(1, Math.floor(override) || hc));
+}
+
 async function loadWasm() {
+  globalThis.CHAD_POOL = poolSize();
   threaded = window.crossOriginIsolated === true;
   const src = threaded ? './chad.js' : './chad-st.js';
   const { default: createChad } = await import(src);
   wasm = await createChad();
 }
 
-function hc() { return Math.min(32, navigator.hardwareConcurrency || 4); }
+function hc() { return threaded ? poolSize() : 1; }
 
 function fillThreads() {
   const sel = $('threads');
   sel.innerHTML = '';
-  const n = threaded ? hc() : 1;
-  for (let i = 1; i <= n; i++) {
+  const n = hc();
+  const steps = [1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128]
+    .filter((v) => v < n);
+  steps.push(n);
+  for (const v of steps) {
     const o = document.createElement('option');
-    o.value = String(i);
-    o.textContent = String(i);
+    o.value = String(v);
+    o.textContent = String(v);
     sel.appendChild(o);
   }
   sel.value = String(n);
@@ -89,6 +105,9 @@ function fillThreads() {
   if (!threaded) {
     setStatus('no cross-origin isolation: running single-threaded WASM fallback ' +
               '(reload once to let the service worker enable threads)');
+  } else if (!new URLSearchParams(location.search).get('threads')) {
+    sel.title = 'pool sized from navigator.hardwareConcurrency, which browsers ' +
+                'may under-report; add ?threads=N to the URL to override';
   }
 }
 
@@ -181,7 +200,8 @@ async function ensureGpu() {
       setStatus(`WebGPU device lost (${info.message}); falling back to WASM`);
       gpu = null;
       gpuMesh = null;
-      gpuBusy = false;
+      gpuInFlight = 0;
+      gpuLastDone = 0;
       state.renderer = 'wasm';
       $('renderer').value = 'wasm';
       canvas.hidden = false;
@@ -242,26 +262,32 @@ function frame(t) {
     hud.textContent = hudText(fpsEMA, ms, rays);
     return;
   }
-  // GPU paths: never submit faster than frames complete (a slow adapter
-  // would otherwise pile up an unbounded queue and present nothing).
-  if (gpuBusy) return;
+  // GPU paths: keep a bounded number of frames in flight. One-at-a-time
+  // would serialize on onSubmittedWorkDone, whose completion signal can lag
+  // several vsyncs behind the GPU actually finishing -- leaving fast GPUs
+  // mostly idle. Two in flight keeps real GPUs saturated while a slow
+  // adapter (SwiftShader) still can't pile up an unbounded queue.
+  if (gpuInFlight >= GPU_MAX_IN_FLIGHT) return;
   const mesh = state.sceneId === 5;
   const eng = mesh ? gpuMesh : gpu;
   if (!eng) return;
-  gpuBusy = true;
-  const t0 = performance.now();
+  gpuInFlight++;
   const W = state.W, H = state.H;
   const raster = state.renderer === 'raster';
   if (mesh && raster) gpuMesh.renderRaster(orbit);
   else if (mesh) gpuMesh.renderRT(orbit);
   else gpu.render(orbit);
   eng.device.queue.onSubmittedWorkDone().then(() => {
-    gpuBusy = false;
-    const ms = performance.now() - t0;
+    gpuInFlight--;
+    // Frame rate = interval between completions (pipelined), not the
+    // submit->done round trip (which includes signal latency).
+    const now = performance.now();
+    const ms = gpuLastDone ? now - gpuLastDone : 16.7;
+    gpuLastDone = now;
     eng.maybeGrowSlices(ms);
     gpuMsEMA = gpuMsEMA ? gpuMsEMA * 0.8 + ms * 0.2 : ms;
     if (!raster) {
-      const rps = (W * H) / (ms / 1000);
+      const rps = (W * H) / (gpuMsEMA / 1000);
       raysEMA = raysEMA ? raysEMA * 0.9 + rps * 0.1 : rps;
     }
     hud.textContent = hudText(1000 / gpuMsEMA, gpuMsEMA, null) +
@@ -410,7 +436,7 @@ function wireControls() {
         canvas.hidden = false;
         gpucanvas.hidden = true;
       }
-      raysEMA = 0; fpsEMA = 0; gpuMsEMA = 0;
+      raysEMA = 0; fpsEMA = 0; gpuMsEMA = 0; gpuLastDone = 0;
     } finally {
       switching = false;
     }

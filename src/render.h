@@ -244,6 +244,8 @@ inline float primary_row(const Scene& sc, const Camera& cam, int W, int y) {
   return rowsink;
 }
 
+// The calling thread participates as worker 0, so N threads of work spawn
+// only N-1 std::threads (and the browser main thread never just spin-waits).
 template <typename RowFn>
 inline void parallel_rows(int H, int nthreads, RowFn&& fn) {
   if (nthreads <= 1) {
@@ -251,17 +253,17 @@ inline void parallel_rows(int H, int nthreads, RowFn&& fn) {
     return;
   }
   std::atomic<int> next{0};
+  auto work = [&](int tid) {
+    for (;;) {
+      int y = next.fetch_add(1, std::memory_order_relaxed);
+      if (y >= H) break;
+      fn(y, tid);
+    }
+  };
   std::vector<std::thread> pool;
-  pool.reserve(nthreads);
-  for (int t = 0; t < nthreads; ++t) {
-    pool.emplace_back([&, t] {
-      for (;;) {
-        int y = next.fetch_add(1, std::memory_order_relaxed);
-        if (y >= H) break;
-        fn(y, t);
-      }
-    });
-  }
+  pool.reserve(size_t(nthreads) - 1);
+  for (int t = 1; t < nthreads; ++t) pool.emplace_back(work, t);
+  work(0);
   for (auto& th : pool) th.join();
 }
 

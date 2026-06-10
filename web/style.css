@@ -1,0 +1,82 @@
+:root {
+  --bg: #0b0e14;
+  --panel: #131826;
+  --ink: #d8dee9;
+  --dim: #7b8496;
+  --acc: #4be38a;
+  --acc2: #5ab0ff;
+  --warn: #ffb454;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.5 "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+header { padding: 18px 22px 6px; }
+h1 {
+  margin: 0;
+  font-size: 26px;
+  letter-spacing: 3px;
+  color: var(--acc);
+  text-shadow: 0 0 18px rgba(75, 227, 138, .35);
+}
+.tag { margin: 4px 0 0; color: var(--dim); max-width: 72ch; }
+main { padding: 12px 22px 22px; }
+#view { position: relative; max-width: 1280px; }
+canvas {
+  width: 100%;
+  background: #000;
+  border: 1px solid #232a3b;
+  border-radius: 6px;
+  image-rendering: pixelated;
+}
+#hud {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  padding: 6px 10px;
+  background: rgba(10, 12, 18, .75);
+  border: 1px solid #2a3145;
+  border-radius: 4px;
+  color: var(--acc);
+  white-space: pre;
+  font-size: 13px;
+}
+#controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: end;
+  margin-top: 12px;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid #232a3b;
+  border-radius: 6px;
+  max-width: 1280px;
+}
+label { display: flex; flex-direction: column; gap: 3px; color: var(--dim); font-size: 12px; }
+select, button {
+  background: #0e1320;
+  color: var(--ink);
+  border: 1px solid #2a3145;
+  border-radius: 4px;
+  padding: 6px 10px;
+  font: inherit;
+}
+button { cursor: pointer; color: var(--acc); border-color: #2f4a3a; }
+button:hover { background: #14202f; }
+button:disabled { opacity: .4; cursor: wait; }
+#status { flex-basis: 100%; color: var(--warn); min-height: 1.2em; }
+#benchsec { max-width: 1280px; margin-top: 18px; }
+h2 { font-size: 16px; color: var(--acc2); margin: 18px 0 8px; }
+.note { color: var(--dim); font-size: 12px; margin: 0 0 8px; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #232a3b; }
+th { color: var(--dim); font-weight: normal; }
+td.num { color: var(--acc); }
+td.faster { color: var(--acc); font-weight: bold; }
+td.slower { color: var(--warn); }
+a { color: var(--acc2); }
+footer { padding: 8px 22px 26px; color: var(--dim); font-size: 12px; max-width: 100ch; }

@@ -4,6 +4,8 @@ chad
 out.png
 web/chad.js
 web/chad.wasm
+web/chad-st.js
+web/chad-st.wasm
 web/chad.worker.js
 node_modules/
 package.json

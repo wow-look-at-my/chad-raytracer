@@ -21,7 +21,7 @@ emsdk lives at `/opt/emsdk` in the dev container: `source /opt/emsdk/emsdk_env.s
 ## Layout
 
 - `src/trace.h` — the hot loop: brute-force SIMD sphere packets (16 lanes), 2-phase discriminant/early-skip; mesh hits encoded as `MESH_BIT | tri`.
-- `src/mesh.h` — triangle mesh, Möller–Trumbore, uniform grid build + 3D-DDA (Amanatides & Woo). NOT a BVH; keep it that way.
+- `src/mesh.h` — triangle mesh, uniform grid build + 3D-DDA (Amanatides & Woo), per-cell triangles in padded 16-wide SoA blocks tested by a branchless SIMD Möller–Trumbore (`tri_block_hit`). NOT a BVH; keep it that way.
 - `src/render.h` — camera, masked Whitted shading (sky/sun/shadows/mirror), `parallel_rows` (std::thread + atomic counter; calling thread participates — same code in WASM).
 - `src/scene.h` — sphere scenes (`one s8 s64 s256 rtiow`) + `sponza` (mesh).
 - `src/wasm.cpp` — C ABI exports for the browser; exports must be mirrored in `Makefile` `WASM_EXPORTS`.

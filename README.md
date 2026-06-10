@@ -30,7 +30,7 @@ acceleration structure of any kind — at 11.4 fps / 23.6 Mrays/s on a 4-core
 | raytraced (WGSL compute, grid DDA) | rasterized (same mesh, classic pipeline) |
 |---|---|
 | ![Sponza raytraced](docs/img/sponza_rt.png) | ![Sponza rasterized](docs/img/sponza_raster.png) |
-| sun + shadows + sky through the roof | no shadows, no sky — the 60-year-old cheat |
+| Identical camera and shading — primary visibility matches pixel-for-pixel. The one thing the rasterizer can't do is the shadow ray, so flipping modes makes shadows appear and disappear. |
 
 ## Measured numbers (this dev box: 4-core Intel Xeon 2.8 GHz, AVX-512)
 
@@ -43,18 +43,19 @@ Native, primary visibility rays at 1920×1080, brute force unless noted
 | s8 | 8 spheres | **819** | 6553 | 395 |
 | s64 | 64 spheres | **161** | 10278 | 77 |
 | s256 | 256 spheres | 43 | 11113 | 21 |
-| rtiow | 479 spheres | 24 | 11323 | 11.4 |
-| rtiow (full shading, shadows + reflections) | 479 spheres | 20 | 9717 | 4.8 |
-| sponza | 262,267 triangles (grid DDA) | 0.9 | — | 0.5 |
+| rtiow | 479 spheres | 24 | 11602 | 11.7 |
+| rtiow (full shading, shadows + reflections) | 479 spheres | 20 | 9608 | 4.7 |
+| sponza | 262,267 triangles (grid DDA) | 4.1 | — | 2.0 |
+| sponza (full shading + shadows) | 262,267 triangles | 4.4 | — | 1.3 |
 
 Same core compiled to WebAssembly, running in V8 (4 threads, SIMD128):
 
 | scene | Mrays/s in the browser engine |
 |-------|------------------------------|
-| 1 sphere | **640** |
-| 64 spheres | 43 |
-| rtiow (479) | 6.0 |
-| sponza (262k tris) | 0.5 |
+| 1 sphere | **713** |
+| 64 spheres | 42 |
+| rtiow (479) | 5.7 |
+| sponza (262k tris) | 1.7 |
 
 On the reference machine for this project — a **Ryzen 7 7800X3D** (8 Zen 4
 cores, full AVX-512, ~5 GHz) — scale the native numbers by roughly 2.5–3.5×
@@ -70,7 +71,7 @@ Published figures for real ray-tracing hardware, against the numbers above
 
 | hardware ray tracer | year | their figure | ours (4-core VM, software, no BVH) |
 |---|---|---|---|
-| [Saarland RPU](https://dl.acm.org/doi/10.1145/1073204.1073211) (the original ray-tracing chip, FPGA) | 2005 | ≈4.1 Mrays/s measured, primary rays | 2226 Mrays/s (1 sphere) → **540× faster**; even the 479-sphere scene is 5.8× faster |
+| [Saarland RPU](https://dl.acm.org/doi/10.1145/1073204.1073211) (the original ray-tracing chip, FPGA) | 2005 | ≈4.1 Mrays/s measured, primary rays (scenes up to ~53k tris) | 2255 Mrays/s (1 sphere) → **540× faster**; the 479-sphere scene is 5.9× faster; even 262k-triangle Sponza matches it at 4.1 Mrays/s on a 5× bigger scene |
 | [Caustic R2100](https://www.design-reuse.com/news/31295/imgtec-r2500-r2100.html) PCIe RT accelerator ($795) | 2013 | 50 M incoherent rays/s claimed | 161 Mrays/s on 64 spheres → **3.2× faster** |
 | [Caustic R2500](https://www.design-reuse.com/news/31295/imgtec-r2500-r2100.html) PCIe RT accelerator ($1495) | 2013 | 100 M incoherent rays/s claimed | 161 Mrays/s on 64 spheres → **1.6× faster**; 819 on 8 spheres → 8.2× |
 | [PowerVR Wizard GR6500](https://www.theregister.com/2014/03/18/imagination_technologies_announces_powervr_gr6500/) RT GPU | 2014 | 300 Mrays/s claimed peak @600 MHz | 819 Mrays/s (8 spheres) → **2.7× faster**; 2226 on 1 sphere → 7.4× |
@@ -136,8 +137,10 @@ adaptively, so slow adapters never trip a device watchdog.
   at 1080p (~11.3 **billion** sphere tests/s sustained).
 - **All cores, zero contention.** An atomic row counter feeds threads;
   the calling thread works too. Same code natively and in WASM pthreads.
-- **Sponza** = Möller–Trumbore through a flat grid (3D-DDA), precomputed
-  edge vectors, CSR cell lists. Built in milliseconds at load.
+- **Sponza** = Möller–Trumbore through a flat grid (3D-DDA). Each cell's
+  triangles are stored as padded 16-wide SoA blocks, so one AVX-512
+  iteration tests 16 triangles — that one change took Sponza from 1.0 to
+  4.4 Mrays/s. Built in milliseconds at load.
 - **WGSL compute** mirrors both: one thread per pixel, same math, no RT API.
 
 ## Repo tour

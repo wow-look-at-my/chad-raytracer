@@ -11,7 +11,9 @@ all: native
 
 native: chad
 
-chad: src/main.cpp src/vec3.h src/image.h src/scene.h src/trace.h src/render.h
+HEADERS := $(wildcard src/*.h)
+
+chad: src/main.cpp $(HEADERS)
 	$(CXX) $(NATIVE_FLAGS) -o $@ src/main.cpp
 
 WASM_EXPORTS := -sEXPORTED_FUNCTIONS=_malloc,_free,_chad_set_scene,_chad_scene_count,_chad_render,_chad_bench_primary,_chad_frame_ptr,_chad_stats_ptr,_chad_spheres_ptr,_chad_scene_info_ptr,_chad_lanes,_chad_selftest,_chad_load_mesh,_chad_has_mesh,_chad_mesh_verts_ptr,_chad_mesh_tris_ptr,_chad_grid_start_ptr,_chad_grid_start_len,_chad_grid_items_ptr,_chad_grid_items_len,_chad_grid_meta_ptr \
@@ -19,7 +21,7 @@ WASM_EXPORTS := -sEXPORTED_FUNCTIONS=_malloc,_free,_chad_set_scene,_chad_scene_c
 
 wasm: web/chad.js web/chad-st.js
 
-web/chad.js: src/wasm.cpp src/vec3.h src/image.h src/scene.h src/trace.h src/render.h
+web/chad.js: src/wasm.cpp $(HEADERS)
 	$(EMCC) $(WASM_FLAGS) -pthread src/wasm.cpp -o $@ \
 	  -sMODULARIZE=1 -sEXPORT_NAME=createChad -sEXPORT_ES6=1 \
 	  -sINITIAL_MEMORY=268435456 -sSTACK_SIZE=2097152 \
@@ -29,7 +31,7 @@ web/chad.js: src/wasm.cpp src/vec3.h src/image.h src/scene.h src/trace.h src/ren
 	  -sALLOW_MEMORY_GROWTH=0
 
 # Single-threaded fallback for browsers without cross-origin isolation.
-web/chad-st.js: src/wasm.cpp src/vec3.h src/image.h src/scene.h src/trace.h src/render.h
+web/chad-st.js: src/wasm.cpp $(HEADERS)
 	$(EMCC) $(WASM_FLAGS) src/wasm.cpp -o $@ \
 	  -sMODULARIZE=1 -sEXPORT_NAME=createChad -sEXPORT_ES6=1 \
 	  -sINITIAL_MEMORY=268435456 -sSTACK_SIZE=2097152 \

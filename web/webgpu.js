@@ -279,6 +279,13 @@ export class GpuMesh {
       fragment: { module, entryPoint: 'fs_blit', targets: [{ format: engine.format }] },
       primitive: { topology: 'triangle-list' },
     });
+    e.skyPipe = dev.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module, entryPoint: 'vs_blit' },
+      fragment: { module, entryPoint: 'fs_sky', targets: [{ format: engine.format }] },
+      primitive: { topology: 'triangle-list' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'always' },
+    });
     e.ubuf = dev.createBuffer({ size: 256, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     e.sinkBuf = dev.createBuffer({ size: 64 * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     const mkbuf = (arr) => {
@@ -311,6 +318,10 @@ export class GpuMesh {
         { binding: 1, resource: { buffer: e.vbuf } },
         { binding: 2, resource: { buffer: e.tbuf } },
       ],
+    });
+    e.skyBG = dev.createBindGroup({
+      layout: e.skyPipe.getBindGroupLayout(0),
+      entries: [{ binding: 0, resource: { buffer: e.ubuf } }],
     });
     return e;
   }
@@ -435,6 +446,9 @@ export class GpuMesh {
         depthStoreOp: 'discard',
       },
     });
+    rp.setPipeline(this.skyPipe);
+    rp.setBindGroup(0, this.skyBG);
+    rp.draw(3);
     rp.setPipeline(this.rasterPipe);
     rp.setBindGroup(0, this.rasterBG);
     rp.draw(this.ntris * 3);

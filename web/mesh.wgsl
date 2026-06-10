@@ -193,11 +193,24 @@ fn vs_mesh(@builtin(vertex_index) vi: u32) -> VOut {
 
 @fragment
 fn fs_mesh(in: VOut) -> @location(0) vec4f {
-  // No shadow rays here -- rasterization cannot do them. N.L + ambient only.
-  let ndl = abs(dot(in.nrm, U.sun.xyz));
+  // Shading is IDENTICAL to render_mesh except the shadow ray (vis), which
+  // rasterization cannot do. Primary visibility matches the raytracer, so
+  // flipping modes shows the same image with shadows appearing/disappearing.
+  let rd = pixel_dir(in.pos.xy);
+  var n = in.nrm;
+  if (dot(n, rd) > 0.0) { n = -n; }
+  let ndl = max(dot(n, U.sun.xyz), 0.0);
   let light = U.ambient.xyz + U.sun_color.xyz * U.sun.w * ndl;
   let g = sqrt(clamp(in.col * light, vec3f(0.0), vec3f(1.0)));
   return vec4f(g, 1.0);
+}
+
+// Fullscreen sky pass for the raster mode (same sky() as the raytracer),
+// drawn first with depth writes off so the mesh covers it.
+@fragment
+fn fs_sky(@builtin(position) pos: vec4f) -> @location(0) vec4f {
+  let rd = pixel_dir(pos.xy);
+  return vec4f(sqrt(clamp(sky(rd), vec3f(0.0), vec3f(1.0))), 1.0);
 }
 
 // ---- fullscreen blit for the compute path ----

@@ -109,9 +109,23 @@ export class GpuEngine {
     return e;
   }
 
+  // Frames are submitted in row slices. Slices start small and grow while
+  // frames complete quickly, so a slow adapter (SwiftShader, weak iGPU)
+  // never receives a single watchdog-tripping submission.
+  sliceRows(w) {
+    if (!this.pxPerSlice) this.pxPerSlice = 1 << 14;
+    return Math.max(8, Math.floor(this.pxPerSlice / w / 8) * 8);
+  }
+
+  maybeGrowSlices(frameMs) {
+    if (!this.pxPerSlice) this.pxPerSlice = 1 << 14;
+    if (frameMs < 100 && this.pxPerSlice < (1 << 23)) this.pxPerSlice <<= 1;
+  }
+
   setScene(spheres12, info) {
     this.info = Float32Array.from(info);
     this.count = Math.round(this.info[17]);
+    this.pxPerSlice = 1 << 14;  // scene cost changed; re-learn slice size
     if (this.sphereBuf) this.sphereBuf.destroy();
     this.sphereBuf = this.device.createBuffer({
       size: Math.max(48, spheres12.byteLength),
@@ -162,7 +176,7 @@ export class GpuEngine {
     });
   }
 
-  uniforms(orbit, w, h) {
+  uniforms(orbit, w, h, yoff) {
     const I = this.info;
     const cam = makeCamera(orbitFrom(I, orbit), [I[3], I[4], I[5]], [0, 1, 0], I[6], w, h);
     const buf = new ArrayBuffer(128);
@@ -173,52 +187,62 @@ export class GpuEngine {
     f.set([...cam.du, 0], 8);
     f.set([...cam.dv, 0], 12);
     f.set([I[7], I[8], I[9], I[10]], 16);
-    f.set([I[11], I[12], I[13], 0], 20);
+    f.set([I[11], I[12], I[13], yoff], 20);  // .w = slice row offset
     f.set([I[14], I[15], I[16], 0], 24);
     u.set([this.count, this.bounces, w, h], 28);
     return buf;
   }
 
   render(orbit) {
-    this.device.queue.writeBuffer(this.ubuf, 0, this.uniforms(orbit, this.w, this.h));
-    const enc = this.device.createCommandEncoder();
-    const cp = enc.beginComputePass();
-    cp.setPipeline(this.renderPipe);
-    cp.setBindGroup(0, this.renderBG);
-    cp.dispatchWorkgroups(Math.ceil(this.w / 8), Math.ceil(this.h / 8));
-    cp.end();
-    const rp = enc.beginRenderPass({
-      colorAttachments: [{
-        view: this.ctx.getCurrentTexture().createView(),
-        loadOp: 'clear',
-        storeOp: 'store',
-        clearValue: { r: 0, g: 0, b: 0, a: 1 },
-      }],
-    });
-    rp.setPipeline(this.blitPipe);
-    rp.setBindGroup(0, this.blitBG);
-    rp.draw(3);
-    rp.end();
-    this.device.queue.submit([enc.finish()]);
+    const rows8 = this.sliceRows(this.w);
+    for (let y0 = 0; y0 < this.h; y0 += rows8) {
+      this.device.queue.writeBuffer(this.ubuf, 0, this.uniforms(orbit, this.w, this.h, y0));
+      const enc = this.device.createCommandEncoder();
+      const cp = enc.beginComputePass();
+      cp.setPipeline(this.renderPipe);
+      cp.setBindGroup(0, this.renderBG);
+      cp.dispatchWorkgroups(Math.ceil(this.w / 8), Math.ceil(Math.min(rows8, this.h - y0) / 8));
+      cp.end();
+      if (y0 + rows8 >= this.h) {
+        const rp = enc.beginRenderPass({
+          colorAttachments: [{
+            view: this.ctx.getCurrentTexture().createView(),
+            loadOp: 'clear',
+            storeOp: 'store',
+            clearValue: { r: 0, g: 0, b: 0, a: 1 },
+          }],
+        });
+        rp.setPipeline(this.blitPipe);
+        rp.setBindGroup(0, this.blitBG);
+        rp.draw(3);
+        rp.end();
+      }
+      this.device.queue.submit([enc.finish()]);
+    }
   }
 
   // Primary-visibility benchmark batch; returns seconds taken on the GPU
-  // queue for `frames` full-resolution dispatches.
+  // queue for `frames` full-resolution (sliced) dispatches.
   async benchBatch(w, h, frames) {
-    this.device.queue.writeBuffer(this.ubuf, 0, this.uniforms(0, w, h));
     await this.device.queue.onSubmittedWorkDone();
     const t0 = performance.now();
-    const enc = this.device.createCommandEncoder();
     for (let i = 0; i < frames; i++) {
-      const cp = enc.beginComputePass();
-      cp.setPipeline(this.benchPipe);
-      cp.setBindGroup(0, this.benchBG);
-      cp.dispatchWorkgroups(Math.ceil(w / 8), Math.ceil(h / 8));
-      cp.end();
+      const rows8 = this.sliceRows(w);
+      for (let y0 = 0; y0 < h; y0 += rows8) {
+        this.device.queue.writeBuffer(this.ubuf, 0, this.uniforms(0, w, h, y0));
+        const enc = this.device.createCommandEncoder();
+        const cp = enc.beginComputePass();
+        cp.setPipeline(this.benchPipe);
+        cp.setBindGroup(0, this.benchBG);
+        cp.dispatchWorkgroups(Math.ceil(w / 8), Math.ceil(Math.min(rows8, h - y0) / 8));
+        cp.end();
+        this.device.queue.submit([enc.finish()]);
+      }
     }
-    this.device.queue.submit([enc.finish()]);
     await this.device.queue.onSubmittedWorkDone();
-    return (performance.now() - t0) / 1000;
+    const dt = (performance.now() - t0) / 1000;
+    this.maybeGrowSlices((dt * 1000) / frames);
+    return dt;
   }
 }
 
@@ -327,10 +351,24 @@ export class GpuMesh {
     });
   }
 
-  uniforms(orbit, w, h) {
+  sliceRows(w) {
+    if (!this.pxPerSlice) this.pxPerSlice = 1 << 14;
+    return Math.max(8, Math.floor(this.pxPerSlice / w / 8) * 8);
+  }
+
+  maybeGrowSlices(frameMs) {
+    if (!this.pxPerSlice) this.pxPerSlice = 1 << 14;
+    if (frameMs < 100 && this.pxPerSlice < (1 << 23)) this.pxPerSlice <<= 1;
+  }
+
+  uniforms(orbit, w, h, yoff) {
     const I = this.info;
-    const eye = orbitFrom(I, orbit);
-    const at = [I[3], I[4], I[5]];
+    // Pan from a fixed eye (orbiting would fly through Sponza's walls).
+    const eye = [I[0], I[1], I[2]];
+    const rel = sub([I[3], I[4], I[5]], eye);
+    const a = 0.45 * Math.sin(orbit * 0.7);
+    const cs = Math.cos(a), sn = Math.sin(a);
+    const at = add(eye, [rel[0] * cs + rel[2] * sn, rel[1], -rel[0] * sn + rel[2] * cs]);
     const cam = makeCamera(eye, at, [0, 1, 0], I[6], w, h);
     const buf = new ArrayBuffer(256);
     const f = new Float32Array(buf);
@@ -346,37 +384,42 @@ export class GpuMesh {
     f.set([this.meta[6], this.meta[7], this.meta[8], 0], 32);
     f.set([this.meta[9], this.meta[10], this.meta[11], 0], 36);
     u.set([Math.round(this.meta[12]), Math.round(this.meta[13]), Math.round(this.meta[14]), 0], 40);
-    u.set([w, h, 0, 0], 44);
+    u.set([w, h, yoff, 0], 44);
     const mvp = mat4mul(perspectiveZO(I[6], w / h, 0.05, 300), lookAt(eye, at, [0, 1, 0]));
     f.set(mvp, 48);
     return buf;
   }
 
   renderRT(orbit) {
-    this.device.queue.writeBuffer(this.ubuf, 0, this.uniforms(orbit, this.w, this.h));
-    const enc = this.device.createCommandEncoder();
-    const cp = enc.beginComputePass();
-    cp.setPipeline(this.rtPipe);
-    cp.setBindGroup(0, this.rtBG);
-    cp.dispatchWorkgroups(Math.ceil(this.w / 8), Math.ceil(this.h / 8));
-    cp.end();
-    const rp = enc.beginRenderPass({
-      colorAttachments: [{
-        view: this.engine.ctx.getCurrentTexture().createView(),
-        loadOp: 'clear',
-        storeOp: 'store',
-        clearValue: { r: 0, g: 0, b: 0, a: 1 },
-      }],
-    });
-    rp.setPipeline(this.blitPipe);
-    rp.setBindGroup(0, this.blitBG);
-    rp.draw(3);
-    rp.end();
-    this.device.queue.submit([enc.finish()]);
+    const rows8 = this.sliceRows(this.w);
+    for (let y0 = 0; y0 < this.h; y0 += rows8) {
+      this.device.queue.writeBuffer(this.ubuf, 0, this.uniforms(orbit, this.w, this.h, y0));
+      const enc = this.device.createCommandEncoder();
+      const cp = enc.beginComputePass();
+      cp.setPipeline(this.rtPipe);
+      cp.setBindGroup(0, this.rtBG);
+      cp.dispatchWorkgroups(Math.ceil(this.w / 8), Math.ceil(Math.min(rows8, this.h - y0) / 8));
+      cp.end();
+      if (y0 + rows8 >= this.h) {
+        const rp = enc.beginRenderPass({
+          colorAttachments: [{
+            view: this.engine.ctx.getCurrentTexture().createView(),
+            loadOp: 'clear',
+            storeOp: 'store',
+            clearValue: { r: 0, g: 0, b: 0, a: 1 },
+          }],
+        });
+        rp.setPipeline(this.blitPipe);
+        rp.setBindGroup(0, this.blitBG);
+        rp.draw(3);
+        rp.end();
+      }
+      this.device.queue.submit([enc.finish()]);
+    }
   }
 
   renderRaster(orbit) {
-    this.device.queue.writeBuffer(this.ubuf, 0, this.uniforms(orbit, this.w, this.h));
+    this.device.queue.writeBuffer(this.ubuf, 0, this.uniforms(orbit, this.w, this.h, 0));
     const enc = this.device.createCommandEncoder();
     const rp = enc.beginRenderPass({
       colorAttachments: [{
@@ -400,19 +443,24 @@ export class GpuMesh {
   }
 
   async benchBatch(w, h, frames) {
-    this.device.queue.writeBuffer(this.ubuf, 0, this.uniforms(0, w, h));
     await this.device.queue.onSubmittedWorkDone();
     const t0 = performance.now();
-    const enc = this.device.createCommandEncoder();
     for (let i = 0; i < frames; i++) {
-      const cp = enc.beginComputePass();
-      cp.setPipeline(this.benchPipe);
-      cp.setBindGroup(0, this.benchBG);
-      cp.dispatchWorkgroups(Math.ceil(w / 8), Math.ceil(h / 8));
-      cp.end();
+      const rows8 = this.sliceRows(w);
+      for (let y0 = 0; y0 < h; y0 += rows8) {
+        this.device.queue.writeBuffer(this.ubuf, 0, this.uniforms(0, w, h, y0));
+        const enc = this.device.createCommandEncoder();
+        const cp = enc.beginComputePass();
+        cp.setPipeline(this.benchPipe);
+        cp.setBindGroup(0, this.benchBG);
+        cp.dispatchWorkgroups(Math.ceil(w / 8), Math.ceil(Math.min(rows8, h - y0) / 8));
+        cp.end();
+        this.device.queue.submit([enc.finish()]);
+      }
     }
-    this.device.queue.submit([enc.finish()]);
     await this.device.queue.onSubmittedWorkDone();
-    return (performance.now() - t0) / 1000;
+    const dt = (performance.now() - t0) / 1000;
+    this.maybeGrowSlices((dt * 1000) / frames);
+    return dt;
   }
 }

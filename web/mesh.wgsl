@@ -15,7 +15,7 @@ struct Uniforms {
   cell: vec4f,
   inv_cell: vec4f,
   dims: vec4u,       // gx gy gz, w unused
-  counts: vec4u,     // width, height, unused, unused
+  counts: vec4u,     // width, height, row offset of this slice, unused
   mvp: mat4x4f,
 }
 
@@ -127,9 +127,10 @@ fn pixel_dir(px: vec2f) -> vec3f {
 
 @compute @workgroup_size(8, 8)
 fn render_mesh(@builtin(global_invocation_id) gid: vec3u) {
-  if (gid.x >= U.counts.x || gid.y >= U.counts.y) { return; }
+  let py = gid.y + U.counts.z;
+  if (gid.x >= U.counts.x || py >= U.counts.y) { return; }
   let ro = U.origin.xyz;
-  let rd = pixel_dir(vec2f(f32(gid.x) + 0.5, f32(gid.y) + 0.5));
+  let rd = pixel_dir(vec2f(f32(gid.x) + 0.5, f32(py) + 0.5));
   var col: vec3f;
   let h = dda(ro, rd, 1e-3, FAR, false);
   if (h.y < 0.0) {
@@ -152,15 +153,16 @@ fn render_mesh(@builtin(global_invocation_id) gid: vec3u) {
     col = alb * light;
   }
   let g = sqrt(clamp(col, vec3f(0.0), vec3f(1.0)));
-  textureStore(outTex, vec2i(gid.xy), vec4f(g, 1.0));
+  textureStore(outTex, vec2i(i32(gid.x), i32(py)), vec4f(g, 1.0));
 }
 
 @compute @workgroup_size(8, 8)
 fn bench_mesh(@builtin(global_invocation_id) gid: vec3u) {
-  if (gid.x >= U.counts.x || gid.y >= U.counts.y) { return; }
-  let rd = pixel_dir(vec2f(f32(gid.x) + 0.5, f32(gid.y) + 0.5));
+  let py = gid.y + U.counts.z;
+  if (gid.x >= U.counts.x || py >= U.counts.y) { return; }
+  let rd = pixel_dir(vec2f(f32(gid.x) + 0.5, f32(py) + 0.5));
   let h = dda(U.origin.xyz, rd, 1e-3, FAR, false);
-  sink[(gid.x ^ gid.y) & 63u] = h.x;
+  sink[(gid.x ^ py) & 63u] = h.x;
 }
 
 // ---- classic rasterizer over the same mesh (the 60-year-old cheat) ----

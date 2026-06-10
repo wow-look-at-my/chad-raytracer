@@ -56,6 +56,9 @@ let orbit = 0;
 let lastT = 0;
 let fpsEMA = 0;
 let raysEMA = 0;
+let gpuMsEMA = 0;
+let gpuBusy = false;
+let switching = false;
 let benchRunning = false;
 
 const state = { renderer: 'wasm', sceneId: 4, W: 1280, H: 720, bounces: 2, threads: 1 };
@@ -133,13 +136,19 @@ async function ensureGpuMesh() {
   if (gpuMesh) return gpuMesh;
   const eng = await ensureGpu();
   if (!eng) return null;
-  await ensureSponzaWasm();
-  const save = state.sceneId;
-  wasm._chad_set_scene(5);
-  gpuMesh = await GpuMesh.create(eng, wasmMeshData());
-  wasm._chad_set_scene(save);
-  gpuMesh.setSize(state.W, state.H);
-  return gpuMesh;
+  try {
+    await ensureSponzaWasm();
+    const save = state.sceneId;
+    wasm._chad_set_scene(5);
+    const data = wasmMeshData();
+    wasm._chad_set_scene(save);
+    gpuMesh = await GpuMesh.create(eng, data);
+    gpuMesh.setSize(state.W, state.H);
+    return gpuMesh;
+  } catch (err) {
+    setStatus(`WebGPU mesh init failed: ${err.message}`);
+    return null;
+  }
 }
 
 async function applyScene() {
@@ -168,7 +177,20 @@ async function ensureGpu() {
   if (gpuError) return null;
   try {
     gpu = await GpuEngine.create(gpucanvas);
+    gpu.device.lost.then((info) => {
+      setStatus(`WebGPU device lost (${info.message}); falling back to WASM`);
+      gpu = null;
+      gpuMesh = null;
+      gpuBusy = false;
+      state.renderer = 'wasm';
+      $('renderer').value = 'wasm';
+      canvas.hidden = false;
+      gpucanvas.hidden = true;
+    });
+    const save = state.sceneId;
+    if (save === 5) wasm._chad_set_scene(4);
     gpu.setScene(wasmSpheres(), wasmInfo());
+    if (save === 5) wasm._chad_set_scene(save);
     gpu.setSize(state.W, state.H, state.bounces);
     return gpu;
   } catch (err) {
@@ -183,23 +205,24 @@ function fmtRays(rps) {
   return (rps / 1e6).toFixed(1) + ' Mrays/s';
 }
 
-function hudText(ms, rays) {
+function hudText(fps, ms, rays) {
   const sc = SCENES.find((s) => s.id === state.sceneId);
   const what = sc.mesh
     ? `${sponzaTris.toLocaleString()} tris, uniform grid (no BVH)`
     : `${wasm._chad_scene_count()} spheres, brute force`;
   const eng = state.renderer === 'wasm'
-    ? `WASM SIMD ×${wasm._chad_lanes()} | ${state.threads} thread${state.threads > 1 ? 's' : ''}`
+    ? `WASM SIMD, ${wasm._chad_lanes()}-ray packets | ${state.threads} thread${state.threads > 1 ? 's' : ''}`
     : state.renderer === 'raster' ? 'WebGPU RASTER (no shadows, the old cheat)'
     : 'WebGPU compute raytracing';
+  const rate = state.renderer === 'raster' ? '' : ` | ${fmtRays(raysEMA)}`;
   return `${state.W}×${state.H} | ${sc.label} (${what})\n` +
-         `${eng}\n${fpsEMA.toFixed(1)} fps | ${fmtRays(raysEMA)}${ms != null ? ` | ${ms.toFixed(1)} ms/frame` : ''}` +
+         `${eng}\n${fps.toFixed(1)} fps${rate}${ms != null ? ` | ${ms.toFixed(1)} ms/frame` : ''}` +
          `${rays != null ? ` | ${(rays / 1e6).toFixed(2)} Mrays/frame` : ''}`;
 }
 
 function frame(t) {
   requestAnimationFrame(frame);
-  if (benchRunning) return;
+  if (benchRunning || switching) return;
   const dt = lastT ? (t - lastT) / 1000 : 0.016;
   lastT = t;
   if (animating) orbit += dt * 0.3;
@@ -216,20 +239,34 @@ function frame(t) {
     const px = new Uint8Array(wasm.HEAPU8.buffer, ptr, state.W * state.H * 4);
     imgData.data.set(px);
     ctx2d.putImageData(imgData, 0, 0);
-    hud.textContent = hudText(ms, rays);
-  } else if (state.sceneId === 5 && gpuMesh) {
-    if (state.renderer === 'raster') gpuMesh.renderRaster(orbit);
-    else gpuMesh.renderRT(orbit);
-    const rps = state.renderer === 'raster' ? 0 : state.W * state.H * fpsEMA;
-    raysEMA = rps ? (raysEMA ? raysEMA * 0.9 + rps * 0.1 : rps) : 0;
-    hud.textContent = hudText(null, null) + (rps ? ' (primary-ray lower bound)' : '');
-  } else if (gpu) {
-    gpu.render(orbit);
-    // GPU timing is async; show wall fps and the primary-ray lower bound.
-    const rps = state.W * state.H * fpsEMA;
-    raysEMA = raysEMA ? raysEMA * 0.9 + rps * 0.1 : rps;
-    hud.textContent = hudText(null, null) + ' (primary-ray lower bound)';
+    hud.textContent = hudText(fpsEMA, ms, rays);
+    return;
   }
+  // GPU paths: never submit faster than frames complete (a slow adapter
+  // would otherwise pile up an unbounded queue and present nothing).
+  if (gpuBusy) return;
+  const mesh = state.sceneId === 5;
+  const eng = mesh ? gpuMesh : gpu;
+  if (!eng) return;
+  gpuBusy = true;
+  const t0 = performance.now();
+  const W = state.W, H = state.H;
+  const raster = state.renderer === 'raster';
+  if (mesh && raster) gpuMesh.renderRaster(orbit);
+  else if (mesh) gpuMesh.renderRT(orbit);
+  else gpu.render(orbit);
+  eng.device.queue.onSubmittedWorkDone().then(() => {
+    gpuBusy = false;
+    const ms = performance.now() - t0;
+    eng.maybeGrowSlices(ms);
+    gpuMsEMA = gpuMsEMA ? gpuMsEMA * 0.8 + ms * 0.2 : ms;
+    if (!raster) {
+      const rps = (W * H) / (ms / 1000);
+      raysEMA = raysEMA ? raysEMA * 0.9 + rps * 0.1 : rps;
+    }
+    hud.textContent = hudText(1000 / gpuMsEMA, gpuMsEMA, null) +
+                      (raster ? '' : ' (primary rays only; shadow rays excluded)');
+  });
 }
 
 function yieldUI() { return new Promise((r) => setTimeout(r, 0)); }
@@ -355,23 +392,28 @@ function updateRasterOption() {
 function wireControls() {
   $('renderer').addEventListener('change', async (e) => {
     const v = e.target.value;
-    if (v === 'webgpu' || v === 'raster') {
-      const ok = await ensureGpu();
-      if (!ok) { e.target.value = 'wasm'; return; }
-      if (state.sceneId === 5) {
-        const gm = await ensureGpuMesh();
-        if (!gm) { e.target.value = 'wasm'; return; }
-        gm.setSize(state.W, state.H);
+    switching = true;
+    try {
+      if (v === 'webgpu' || v === 'raster') {
+        const ok = await ensureGpu();
+        if (!ok) { e.target.value = 'wasm'; state.renderer = 'wasm'; return; }
+        if (state.sceneId === 5) {
+          const gm = await ensureGpuMesh();
+          if (!gm) { e.target.value = 'wasm'; state.renderer = 'wasm'; return; }
+          gm.setSize(state.W, state.H);
+        }
+        state.renderer = v;
+        canvas.hidden = true;
+        gpucanvas.hidden = false;
+      } else {
+        state.renderer = 'wasm';
+        canvas.hidden = false;
+        gpucanvas.hidden = true;
       }
-      state.renderer = v;
-      canvas.hidden = true;
-      gpucanvas.hidden = false;
-    } else {
-      state.renderer = 'wasm';
-      canvas.hidden = false;
-      gpucanvas.hidden = true;
+      raysEMA = 0; fpsEMA = 0; gpuMsEMA = 0;
+    } finally {
+      switching = false;
     }
-    raysEMA = 0; fpsEMA = 0;
   });
   $('scene').addEventListener('change', async (e) => {
     state.sceneId = Number(e.target.value);

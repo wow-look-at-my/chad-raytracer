@@ -8,7 +8,9 @@ struct Uniforms {
   du: vec4f,         // per-pixel x delta
   dv: vec4f,         // per-pixel y delta
   sun: vec4f,        // xyz = direction to sun, w = intensity
-  sun_color: vec4f,  // rgb
+  sun_color: vec4f,  // rgb; w = row offset of this slice (frames are
+                     // dispatched in row slices so no single submission can
+                     // trip a GPU watchdog/TDR)
   ambient: vec4f,    // rgb
   counts: vec4u,     // x = sphere count, y = bounces, z = width, w = height
 }
@@ -72,9 +74,10 @@ fn pixel_dir(px: vec2f) -> vec3f {
 
 @compute @workgroup_size(8, 8)
 fn render(@builtin(global_invocation_id) gid: vec3u) {
-  if (gid.x >= U.counts.z || gid.y >= U.counts.w) { return; }
+  let py = gid.y + u32(U.sun_color.w + 0.5);
+  if (gid.x >= U.counts.z || py >= U.counts.w) { return; }
   var ro = U.origin.xyz;
-  var rd = pixel_dir(vec2f(f32(gid.x) + 0.5, f32(gid.y) + 0.5));
+  var rd = pixel_dir(vec2f(f32(gid.x) + 0.5, f32(py) + 0.5));
   var col = vec3f(0.0);
   var w = vec3f(1.0);
   let bounces = U.counts.y;
@@ -107,17 +110,18 @@ fn render(@builtin(global_invocation_id) gid: vec3u) {
     ro = hp + nrm * 4e-3;
   }
   let g = sqrt(clamp(col, vec3f(0.0), vec3f(1.0)));
-  textureStore(outTex, vec2i(gid.xy), vec4f(g, 1.0));
+  textureStore(outTex, vec2i(i32(gid.x), i32(py)), vec4f(g, 1.0));
 }
 
 // Primary-visibility-only benchmark kernel. The storage write is a side
 // effect the compiler cannot remove (races are irrelevant; it is a sink).
 @compute @workgroup_size(8, 8)
 fn bench(@builtin(global_invocation_id) gid: vec3u) {
-  if (gid.x >= U.counts.z || gid.y >= U.counts.w) { return; }
-  let rd = pixel_dir(vec2f(f32(gid.x) + 0.5, f32(gid.y) + 0.5));
+  let py = gid.y + u32(U.sun_color.w + 0.5);
+  if (gid.x >= U.counts.z || py >= U.counts.w) { return; }
+  let rd = pixel_dir(vec2f(f32(gid.x) + 0.5, f32(py) + 0.5));
   let h = trace(U.origin.xyz, rd);
-  sink[(gid.x ^ gid.y) & 63u] = h.x;
+  sink[(gid.x ^ py) & 63u] = h.x;
 }
 
 // Fullscreen blit of the storage texture onto the canvas.

@@ -30,6 +30,15 @@ static double now_s() {
 }
 
 static Camera orbit_camera(int w, int h, float orbit) {
+  if (g_desc.scene.mesh) {
+    // Mesh scenes (Sponza): orbiting the look-at point would swing the eye
+    // through walls, so pan the view from a fixed eye instead.
+    Vec3 rel = g_desc.lookat - g_desc.lookfrom;
+    float a = 0.45f * std::sin(orbit * 0.7f);
+    float cs = std::cos(a), sn = std::sin(a);
+    Vec3 at = g_desc.lookfrom + Vec3{rel.x * cs + rel.z * sn, rel.y, -rel.x * sn + rel.z * cs};
+    return Camera::make(g_desc.lookfrom, at, {0, 1, 0}, g_desc.vfov, w, h);
+  }
   Vec3 rel = g_desc.lookfrom - g_desc.lookat;
   float cs = std::cos(orbit), sn = std::sin(orbit);
   Vec3 from = g_desc.lookat + Vec3{rel.x * cs + rel.z * sn, rel.y, -rel.x * sn + rel.z * cs};

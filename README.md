@@ -4,6 +4,10 @@
 hierarchy, and no ray-tracing hardware — that outruns dedicated ray-tracing
 silicon. Runs natively and in your browser.**
 
+**Live demo: <https://wow-look-at-my.github.io/chad-raytracer/>** — WASM SIMD
+threads on your CPU, WebGPU compute on your GPU, Sponza raytraced/rasterized
+flip, and a one-click benchmark against published hardware-RT figures.
+
 ![Ray Tracing in One Weekend scene, brute-forced](docs/img/rtiow.png)
 
 *479 spheres, 1080p, brute force — every ray tests every sphere, no
@@ -117,7 +121,9 @@ make serve      # http://localhost:8080 — the browser app
 node test/wasm-test.mjs                           # WASM tests in Node
 ```
 
-The browser app (GitHub Pages-ready, `web/`): pick a scene, pick a renderer —
+The browser app (`web/`, served by GitHub Pages straight from the branch
+root — the WASM artifacts are committed, so there is no build step): pick a
+scene, pick a renderer —
 **WASM SIMD raytraced (CPU)**, **WebGPU raytraced (compute)**, or **WebGPU
 rasterized** (Sponza only; deliberately shadowless so you can see what
 raytracing buys) — and press **run benchmark** for the comparison table

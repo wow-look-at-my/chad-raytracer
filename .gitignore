@@ -1,0 +1,8 @@
+chad
+*.o
+*.ppm
+out.png
+web/chad.worker.js
+node_modules/
+package.json
+package-lock.json

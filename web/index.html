@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CHAD Raytracer — no BVH, no RT cores, no mercy</title>
+<link rel="stylesheet" href="style.css">
+<script src="coi-serviceworker.js"></script>
+</head>
+<body>
+<header>
+  <h1>CHAD RAYTRACER</h1>
+  <p class="tag">Brute force &gt; clever. Zero acceleration structures. Zero ray-tracing hardware.
+  Every ray tests every sphere — in your browser.</p>
+</header>
+
+<main>
+  <div id="view">
+    <canvas id="canvas" width="1280" height="720"></canvas>
+    <canvas id="gpucanvas" width="1280" height="720" hidden></canvas>
+    <div id="hud">loading…</div>
+  </div>
+
+  <div id="controls">
+    <label>renderer
+      <select id="renderer">
+        <option value="wasm" selected>WASM SIMD raytraced (CPU)</option>
+        <option value="webgpu">WebGPU raytraced (compute, no RT units)</option>
+        <option value="raster" disabled>WebGPU rasterized (no shadows)</option>
+      </select>
+    </label>
+    <label>scene
+      <select id="scene">
+        <option value="0">1 sphere</option>
+        <option value="1">8 spheres</option>
+        <option value="2">64 spheres</option>
+        <option value="3">256 spheres</option>
+        <option value="4" selected>RTIOW (479 spheres)</option>
+        <option value="5">Sponza (262k triangles)</option>
+      </select>
+    </label>
+    <label>resolution
+      <select id="res">
+        <option value="320x180">320×180</option>
+        <option value="640x360">640×360</option>
+        <option value="1280x720" selected>1280×720</option>
+        <option value="1920x1080">1920×1080</option>
+      </select>
+    </label>
+    <label>bounces
+      <select id="bounces">
+        <option>0</option><option>1</option><option selected>2</option><option>3</option>
+      </select>
+    </label>
+    <label>threads <select id="threads"></select></label>
+    <button id="animate">⏸ pause</button>
+    <button id="bench">run benchmark</button>
+    <div id="status"></div>
+  </div>
+
+  <section id="benchsec" hidden>
+    <h2>Benchmark — primary rays at 1920×1080, brute force, no acceleration structure</h2>
+    <table id="benchtable">
+      <thead><tr><th>scene</th><th>spheres</th><th>WASM SIMD (CPU)</th><th>WebGPU compute</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <h2>vs. dedicated ray-tracing hardware</h2>
+    <p class="note">Published figures for real hardware ray tracers; sources linked. “×” compares this
+    machine's best brute-force rays/s from the table above.</p>
+    <table id="hwtable">
+      <thead><tr><th>hardware ray tracer</th><th>figure</th><th>context</th><th>this page</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+</main>
+
+<footer>
+  <p>Whitted raytracing, 16-ray SIMD packets in WebAssembly, or one thread per pixel in a WGSL
+  compute shader. No BVH, no kd-tree, no grid; no DXR/OptiX/Vulkan-RT, no RT cores. Sphere
+  intersection is something <em>no</em> RT core can do anyway — they only do triangles and
+  BVH nodes; GPUs fall back to shader code for spheres, just like us.</p>
+</footer>
+<script type="module" src="app.js"></script>
+</body>
+</html>

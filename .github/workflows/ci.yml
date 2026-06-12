@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: make
+      - name: Selftest
+        run: make test
+      - name: Bench smoke test
+        run: |
+          ./chad bench --scene s64 --seconds 1
+          ./chad bench --scene sponza --seconds 1
+          ./chad render --scene sponza --width 320 --height 180 --spp 1 --bounces 1 --out /tmp/s.png
+
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install emsdk
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$HOME/emsdk"
+          "$HOME/emsdk/emsdk" install latest
+          "$HOME/emsdk/emsdk" activate latest
+      - name: Build wasm
+        run: |
+          source "$HOME/emsdk/emsdk_env.sh"
+          make wasm
+      - name: Node tests (threaded + single-thread)
+        run: |
+          node test/wasm-test.mjs
+          node test/wasm-test.mjs st
+      - uses: actions/upload-artifact@v4
+        with:
+          name: site
+          path: web/
